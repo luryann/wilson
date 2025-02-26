@@ -98,6 +98,15 @@
       font-size: 0.9em;
       white-space: pre-wrap;
     }
+    /* Debug toggle container */
+    .debug-toggle {
+      display: flex;
+      align-items: center;
+      margin: 1rem 0;
+    }
+    .debug-toggle input {
+      margin-right: 0.5rem;
+    }
     /* Footer styling */
     footer {
       position: fixed;
@@ -118,7 +127,7 @@
         <p><strong>Attempt:</strong> <span id="attemptCount">0</span> / 6</p>
         
         <!-- Debug Mode Toggle -->
-        <div style="margin: 1rem 0;">
+        <div class="debug-toggle">
           <input type="checkbox" id="debugToggle">
           <label for="debugToggle">Debug Mode</label>
         </div>
@@ -439,7 +448,7 @@
     }
 
     /* ------------------------------
-       Auto-advance for feedback boxes
+       Auto-advance for feedback boxes and Enter key submission
     ------------------------------ */
     feedbackBoxes.forEach((box, index) => {
       box.addEventListener("input", () => {
@@ -450,6 +459,12 @@
       box.addEventListener("keydown", (e) => {
         if (e.key === "Backspace" && box.value === "" && index > 0) {
           feedbackBoxes[index - 1].focus();
+        }
+      });
+      // Pressing Enter will submit the feedback.
+      box.addEventListener("keyup", (e) => {
+        if (e.key === "Enter") {
+          processFeedback();
         }
       });
     });
