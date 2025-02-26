@@ -57,6 +57,7 @@
       color: #fff;
       border-radius: 4px;
       cursor: pointer;
+      margin-right: 0.5rem;
     }
     button:disabled {
       background-color: #aaa;
@@ -101,13 +102,16 @@
         <p><strong>Attempt:</strong> <span id="attemptCount">0</span> / 6</p>
         <label for="feedback">Enter Feedback (5 digits, 0=gray, 1=yellow, 2=green):</label>
         <input type="text" id="feedback" maxlength="5" placeholder="e.g. 21002">
-        <button id="submit">Submit Feedback</button>
+        <div style="margin-bottom:1rem;">
+          <button id="submit">Submit Feedback</button>
+          <button id="restart">Restart Game</button>
+        </div>
         <div id="log"></div>
       </div>
     </div>
   </div>
   <footer>
-    Copyright 2025 Ryan Lu licensed under GNU General Public License version 3
+    &copy; 2025 Ryan Lu | Licensed under GNU General Public License version 3
   </footer>
   <script>
     "use strict";
@@ -134,6 +138,7 @@
     const attemptEl = document.getElementById("attemptCount");
     const feedbackInput = document.getElementById("feedback");
     const submitButton = document.getElementById("submit");
+    const restartButton = document.getElementById("restart");
     const logEl = document.getElementById("log");
 
     /* ------------------------------
@@ -281,7 +286,6 @@
     function filterWords(guess, feedback, wordList) {
       return wordList.filter(word => {
         const tempFeedback = computeFeedback(guess, word);
-        // Compare feedback arrays
         for (let i = 0; i < WORD_LENGTH; i++) {
           if (tempFeedback[i] !== feedback[i]) return false;
         }
@@ -321,7 +325,6 @@
         logMessage("Invalid feedback. Please enter exactly 5 digits (0-2).", true);
         return;
       }
-      // Convert feedback string to an array of numbers.
       const fbArray = fbStr.split("").map(ch => parseInt(ch, 10));
       const solved = fbArray.every(val => val === 2);
 
@@ -335,7 +338,6 @@
         return;
       }
 
-      // Filter the candidate words based on the feedback.
       remainingWords = filterWords(guess, fbArray, remainingWords);
       logMessage(`Remaining possible words: ${remainingWords.length}`);
       attemptCount++;
@@ -357,13 +359,26 @@
       }
     }
 
-    // Event listener for the Submit button.
+    // Restart the game by resetting all state variables and UI elements.
+    function restartGame() {
+      attemptCount = 0;
+      firstGuessUsed = false;
+      remainingWords = [...words];
+      logEl.innerHTML = "";
+      feedbackInput.value = "";
+      submitButton.disabled = false;
+      feedbackInput.disabled = false;
+      updateUI();
+    }
+
+    // Event listeners for the buttons.
     submitButton.addEventListener("click", processFeedback);
     feedbackInput.addEventListener("keyup", function(event) {
       if (event.key === "Enter") {
         processFeedback();
       }
     });
+    restartButton.addEventListener("click", restartGame);
 
     /* ------------------------------
        Initialization: Load word list
@@ -379,13 +394,11 @@
           return response.text();
         })
         .then(text => {
-          // Split the file into lines and filter valid 5-letter words.
           words = text.split(/\r?\n/).map(line => line.trim().toLowerCase())
                         .filter(word => word.length === WORD_LENGTH);
           if (words.length === 0) {
             throw new Error("No valid words found in words.txt");
           }
-          // Initialize the candidate list and precompute first guesses.
           remainingWords = [...words];
           precomputeFirstGuesses(words);
           statusEl.style.display = "none";
@@ -398,7 +411,6 @@
         });
     }
 
-    // Start the app once the DOM is loaded.
     document.addEventListener("DOMContentLoaded", init);
   </script>
 </body>
