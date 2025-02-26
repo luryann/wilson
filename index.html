@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Wordle Solver</title>
   <style>
+    /* CSS styles for a clean, modern interface */
     body {
       font-family: Arial, sans-serif;
       background-color: #f5f5f5;
@@ -40,14 +41,19 @@
       margin-bottom: 0.5rem;
       font-weight: bold;
     }
-    input[type="text"] {
-      width: 100%;
-      padding: 0.5rem;
-      font-size: 1rem;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-      box-sizing: border-box;
+    /* Styles for the individual feedback boxes */
+    #feedbackContainer {
       margin-bottom: 1rem;
+    }
+    .feedback-box {
+      width: 50px;
+      height: 50px;
+      font-size: 2em;
+      text-align: center;
+      border: 2px solid #ccc;
+      border-radius: 4px;
+      margin-right: 0.5rem;
+      display: inline-block;
     }
     button {
       padding: 0.6rem 1rem;
@@ -70,7 +76,7 @@
     .error {
       color: red;
     }
-    /* New style for the suggested word */
+    /* Style for the suggested word */
     #suggestion {
       font-size: 1.8em;
       font-weight: bold;
@@ -81,6 +87,16 @@
       background: #e7f0fd;
       display: inline-block;
       margin-bottom: 1rem;
+    }
+    /* Debug panel styling */
+    #debugPanel {
+      display: none;
+      background: #eee;
+      padding: 1rem;
+      border-radius: 4px;
+      margin-bottom: 1rem;
+      font-size: 0.9em;
+      white-space: pre-wrap;
     }
     /* Footer styling */
     footer {
@@ -100,12 +116,27 @@
       <div id="solver" style="display:none;">
         <p><strong>Suggested Guess:</strong> <span id="suggestion"></span></p>
         <p><strong>Attempt:</strong> <span id="attemptCount">0</span> / 6</p>
+        
+        <!-- Debug Mode Toggle -->
+        <div style="margin: 1rem 0;">
+          <input type="checkbox" id="debugToggle">
+          <label for="debugToggle">Debug Mode</label>
+        </div>
+        <!-- Debug Panel -->
+        <div id="debugPanel"></div>
+        
+        <!-- Feedback input boxes -->
         <label for="feedback">Enter Feedback (5 digits, 0=gray, 1=yellow, 2=green):</label>
-        <input type="text" id="feedback" maxlength="5" placeholder="e.g. 21002">
+        <div id="feedbackContainer">
+          <input type="text" class="feedback-box" id="feedback0" maxlength="1" pattern="[0-2]" inputmode="numeric">
+          <input type="text" class="feedback-box" id="feedback1" maxlength="1" pattern="[0-2]" inputmode="numeric">
+          <input type="text" class="feedback-box" id="feedback2" maxlength="1" pattern="[0-2]" inputmode="numeric">
+          <input type="text" class="feedback-box" id="feedback3" maxlength="1" pattern="[0-2]" inputmode="numeric">
+          <input type="text" class="feedback-box" id="feedback4" maxlength="1" pattern="[0-2]" inputmode="numeric">
+        </div>
         <div style="margin-bottom:1rem;">
           <button id="submit">Submit Feedback</button>
           <button id="restart">Restart Game</button>
-          <br>
         </div>
         <div id="log"></div>
       </div>
@@ -131,16 +162,22 @@
     let cacheInitialized = false;
     let attemptCount = 0;
     let firstGuessUsed = false;
+    let debugMode = false;
+    let debugDetails = "";
 
     // UI elements
     const statusEl = document.getElementById("status");
     const solverEl = document.getElementById("solver");
     const suggestionEl = document.getElementById("suggestion");
     const attemptEl = document.getElementById("attemptCount");
-    const feedbackInput = document.getElementById("feedback");
     const submitButton = document.getElementById("submit");
     const restartButton = document.getElementById("restart");
     const logEl = document.getElementById("log");
+    const debugPanel = document.getElementById("debugPanel");
+    const debugToggle = document.getElementById("debugToggle");
+
+    // Feedback boxes array (we have 5 boxes)
+    const feedbackBoxes = Array.from(document.querySelectorAll('.feedback-box'));
 
     /* ------------------------------
        Utility Functions
@@ -180,7 +217,6 @@
     function calculateEntropy(wordList, candidate) {
       const patternCounts = new Array(MAX_PATTERNS).fill(0);
 
-      // For each word, compute its feedback pattern relative to candidate.
       wordList.forEach(word => {
         const feedback = computeFeedback(candidate, word);
         let pattern = 0;
@@ -218,28 +254,35 @@
           best = item;
         }
       });
+      debugDetails = "Using precomputed optimal first guess:\n";
+      firstGuessCache.forEach(item => {
+        debugDetails += `  ${item.word} with entropy ${item.entropy.toFixed(2)}\n`;
+      });
+      debugDetails += `Chosen: ${best.word}`;
       return best.word;
     }
 
-    // For larger candidate lists, select a guess by sampling SAMPLE_SIZE random words and returning the one with highest entropy.
+    // For larger candidate lists, select a guess by sampling SAMPLE_SIZE random words.
     function selectEntropyGuess(wordList) {
       let maxEntropy = -Infinity;
       let bestWord = wordList[0];
+      let samplesDetail = `Entropy sampling on ${wordList.length} words (${SAMPLE_SIZE} samples):\n`;
       for (let i = 0; i < SAMPLE_SIZE; i++) {
         const index = Math.floor(Math.random() * wordList.length);
         const candidate = wordList[index];
         const ent = calculateEntropy(wordList, candidate);
+        samplesDetail += `  Sample ${i + 1}: ${candidate} => entropy ${ent.toFixed(2)}\n`;
         if (ent > maxEntropy) {
           maxEntropy = ent;
           bestWord = candidate;
         }
       }
+      debugDetails = samplesDetail + `Chosen candidate: ${bestWord} with entropy ${maxEntropy.toFixed(2)}`;
       return bestWord;
     }
 
     // Calculate letter frequency counts per position.
     function calculateFrequencies(wordList) {
-      // Initialize a 2D array for [position][letter]
       const freq = Array.from({ length: WORD_LENGTH }, () => new Array(26).fill(0));
       wordList.forEach(word => {
         for (let pos = 0; pos < WORD_LENGTH; pos++) {
@@ -260,30 +303,33 @@
 
     // Main guess selection logic.
     function selectGuess(wordList) {
-      // On first guess, if the cache is available, use the precomputed optimal first guess.
+      // On first guess, if cache available, use precomputed optimal first guess.
       if (!firstGuessUsed && cacheInitialized) {
         firstGuessUsed = true;
         return getOptimalFirstGuess();
       }
-      // For large candidate lists, use entropy sampling.
+      // Use entropy sampling if candidate list is large.
       if (wordList.length > 100) {
         return selectEntropyGuess(wordList);
       }
-      // Otherwise, use a frequency-based score.
+      // Use frequency-based scoring for small candidate lists.
       const freq = calculateFrequencies(wordList);
       let bestWord = wordList[0];
       let maxScore = -1;
+      let details = `Frequency-based scoring on ${wordList.length} candidates:\n`;
       wordList.forEach(word => {
         const score = wordScore(word, freq);
+        details += `  ${word} => score ${score}\n`;
         if (score > maxScore) {
           maxScore = score;
           bestWord = word;
         }
       });
+      debugDetails = details + `Chosen candidate: ${bestWord} with score ${maxScore}`;
       return bestWord;
     }
 
-    // Filter the current candidate list based on the provided feedback for the last guess.
+    // Filter candidate words based on feedback for the last guess.
     function filterWords(guess, feedback, wordList) {
       return wordList.filter(word => {
         const tempFeedback = computeFeedback(guess, word);
@@ -306,7 +352,7 @@
        UI & Game Logic
     ------------------------------ */
 
-    // Update the suggestion and attempt count in the UI.
+    // Update the suggestion, attempt count, and debug panel in the UI.
     function updateUI() {
       if (remainingWords.length === 0) {
         suggestionEl.textContent = "No possible words remain.";
@@ -316,26 +362,43 @@
       const guess = selectGuess(remainingWords);
       suggestionEl.textContent = guess;
       attemptEl.textContent = attemptCount.toString();
+      if (debugMode) {
+        debugPanel.style.display = "block";
+        debugPanel.textContent = debugDetails;
+      } else {
+        debugPanel.style.display = "none";
+      }
     }
 
-    // Process the feedback input from the user.
+    // Read feedback from the five individual boxes.
+    function getFeedbackFromBoxes() {
+      const fbArray = [];
+      for (let i = 0; i < WORD_LENGTH; i++) {
+        const val = feedbackBoxes[i].value.trim();
+        if (!/^[0-2]$/.test(val)) {
+          return null;
+        }
+        fbArray.push(parseInt(val, 10));
+      }
+      return fbArray;
+    }
+
+    // Process the feedback input.
     function processFeedback() {
       const guess = suggestionEl.textContent;
-      const fbStr = feedbackInput.value.trim();
-      if (fbStr.length !== WORD_LENGTH || !/^[0-2]+$/.test(fbStr)) {
-        logMessage("Invalid feedback. Please enter exactly 5 digits (0-2).", true);
+      const fbArray = getFeedbackFromBoxes();
+      if (!fbArray) {
+        logMessage("Invalid feedback. Please enter digits 0-2 in all boxes.", true);
         return;
       }
-      const fbArray = fbStr.split("").map(ch => parseInt(ch, 10));
       const solved = fbArray.every(val => val === 2);
-
-      logMessage(`Attempt ${attemptCount + 1}: Guess "${guess}" with feedback "${fbStr}"`);
+      logMessage(`Attempt ${attemptCount + 1}: Guess "${guess}" with feedback "${fbArray.join('')}"`);
 
       if (solved) {
         logMessage(`Solved in ${attemptCount + 1} attempts!`);
         suggestionEl.textContent = "✓";
         submitButton.disabled = true;
-        feedbackInput.disabled = true;
+        feedbackBoxes.forEach(box => box.disabled = true);
         return;
       }
 
@@ -353,39 +416,60 @@
         }
         suggestionEl.textContent = "Game Over";
         submitButton.disabled = true;
-        feedbackInput.disabled = true;
+        feedbackBoxes.forEach(box => box.disabled = true);
       } else {
-        feedbackInput.value = "";
+        // Clear all feedback boxes for the next attempt.
+        feedbackBoxes.forEach(box => box.value = "");
         updateUI();
       }
     }
 
-    // Restart the game by resetting all state variables and UI elements.
+    // Restart the game by resetting state and UI elements.
     function restartGame() {
       attemptCount = 0;
       firstGuessUsed = false;
       remainingWords = [...words];
       logEl.innerHTML = "";
-      feedbackInput.value = "";
+      feedbackBoxes.forEach(box => {
+        box.value = "";
+        box.disabled = false;
+      });
       submitButton.disabled = false;
-      feedbackInput.disabled = false;
       updateUI();
     }
 
-    // Event listeners for the buttons.
-    submitButton.addEventListener("click", processFeedback);
-    feedbackInput.addEventListener("keyup", function(event) {
-      if (event.key === "Enter") {
-        processFeedback();
+    /* ------------------------------
+       Auto-advance for feedback boxes
+    ------------------------------ */
+    feedbackBoxes.forEach((box, index) => {
+      box.addEventListener("input", () => {
+        if (box.value.length === 1 && index < WORD_LENGTH - 1) {
+          feedbackBoxes[index + 1].focus();
+        }
+      });
+      box.addEventListener("keydown", (e) => {
+        if (e.key === "Backspace" && box.value === "" && index > 0) {
+          feedbackBoxes[index - 1].focus();
+        }
+      });
+    });
+
+    /* ------------------------------
+       Debug Mode Toggle
+    ------------------------------ */
+    debugToggle.addEventListener("change", () => {
+      debugMode = debugToggle.checked;
+      if (!debugMode) {
+        debugPanel.style.display = "none";
+      } else {
+        debugPanel.style.display = "block";
+        debugPanel.textContent = debugDetails;
       }
     });
-    restartButton.addEventListener("click", restartGame);
 
     /* ------------------------------
        Initialization: Load word list
     ------------------------------ */
-
-    // Fetch words.txt and initialize the solver.
     function init() {
       fetch("words.txt")
         .then(response => {
@@ -413,6 +497,8 @@
     }
 
     document.addEventListener("DOMContentLoaded", init);
+    submitButton.addEventListener("click", processFeedback);
+    restartButton.addEventListener("click", restartGame);
   </script>
 </body>
 </html>
