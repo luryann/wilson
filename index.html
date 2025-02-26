@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wordle Solver</title>
+  <style>
+    /* CSS styles for a clean, modern interface */
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f5f5f5;
+      margin: 0;
+      padding: 20px;
+      color: #333;
+    }
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      background: #fff;
+      padding: 2rem;
+      border-radius: 8px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+    }
+    h1 {
+      text-align: center;
+    }
+    #game {
+      margin-top: 1rem;
+    }
+    .status {
+      margin: 1rem 0;
+      padding: 0.5rem;
+      background-color: #e9ecef;
+      border-radius: 4px;
+    }
+    label {
+      display: block;
+      margin-bottom: 0.5rem;
+      font-weight: bold;
+    }
+    input[type="text"] {
+      width: 100%;
+      padding: 0.5rem;
+      font-size: 1rem;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      box-sizing: border-box;
+      margin-bottom: 1rem;
+    }
+    button {
+      padding: 0.6rem 1rem;
+      font-size: 1rem;
+      background-color: #007bff;
+      border: none;
+      color: #fff;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:disabled {
+      background-color: #aaa;
+    }
+    .log-entry {
+      margin-bottom: 0.5rem;
+      padding: 0.5rem;
+      border-bottom: 1px solid #ddd;
+    }
+    .error {
+      color: red;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Wordle Solver</h1>
+    <div id="game">
+      <div id="status" class="status">Loading word list…</div>
+      <div id="solver" style="display:none;">
+        <p><strong>Suggested Guess:</strong> <span id="suggestion"></span></p>
+        <p><strong>Attempt:</strong> <span id="attemptCount">0</span> / 6</p>
+        <label for="feedback">Enter Feedback (5 digits, 0=gray, 1=yellow, 2=green):</label>
+        <input type="text" id="feedback" maxlength="5" placeholder="e.g. 21002">
+        <button id="submit">Submit Feedback</button>
+        <div id="log"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    "use strict";
+
+    // Constants
+    const WORD_LENGTH = 5;
+    const MAX_PATTERNS = Math.pow(3, WORD_LENGTH);
+    const SAMPLE_SIZE = 100;
+    const MAX_ATTEMPTS = 6;
+    const optimalGuesses = ["salet", "crate", "raise", "roate"];
+
+    // Global state variables
+    let words = [];              // Full word list
+    let remainingWords = [];     // Candidate words after filtering
+    let firstGuessCache = [];    // Cache for optimal first guesses
+    let cacheInitialized = false;
+    let attemptCount = 0;
+    let firstGuessUsed = false;
+
+    // UI elements
+    const statusEl = document.getElementById("status");
+    const solverEl = document.getElementById("solver");
+    const suggestionEl = document.getElementById("suggestion");
+    const attemptEl = document.getElementById("attemptCount");
+    const feedbackInput = document.getElementById("feedback");
+    const submitButton = document.getElementById("submit");
+    const logEl = document.getElementById("log");
+
+    /* ------------------------------
+       Utility Functions
+    ------------------------------ */
+
+    // Compute the feedback for a given guess compared to the target word.
+    // Returns an array of length WORD_LENGTH with values 0 (gray), 1 (yellow), or 2 (green).
+    function computeFeedback(guess, target) {
+      const feedback = new Array(WORD_LENGTH).fill(0);
+      const count = new Array(26).fill(0);
+
+      // Count letters in the target word
+      for (let i = 0; i < WORD_LENGTH; i++) {
+        count[target.charCodeAt(i) - 97]++;
+      }
+
+      // First pass: mark greens and reduce counts
+      for (let i = 0; i < WORD_LENGTH; i++) {
+        if (guess[i] === target[i]) {
+          feedback[i] = 2;
+          count[guess.charCodeAt(i) - 97]--;
+        }
+      }
+
+      // Second pass: mark yellows if available
+      for (let i = 0; i < WORD_LENGTH; i++) {
+        if (feedback[i] !== 2 && count[guess.charCodeAt(i) - 97] > 0) {
+          feedback[i] = 1;
+          count[guess.charCodeAt(i) - 97]--;
+        }
+      }
+
+      return feedback;
+    }
+
+    // Calculate the entropy of a candidate word against a given list of words.
+    function calculateEntropy(wordList, candidate) {
+      const patternCounts = new Array(MAX_PATTERNS).fill(0);
+
+      // For each word, compute its feedback pattern relative to candidate.
+      wordList.forEach(word => {
+        const feedback = computeFeedback(candidate, word);
+        let pattern = 0;
+        for (let i = 0; i < WORD_LENGTH; i++) {
+          pattern = pattern * 3 + feedback[i];
+        }
+        patternCounts[pattern]++;
+      });
+
+      let entropy = 0;
+      const total = wordList.length;
+      patternCounts.forEach(count => {
+        if (count > 0) {
+          const prob = count / total;
+          entropy -= prob * Math.log2(prob);
+        }
+      });
+      return entropy;
+    }
+
+    // Precompute the entropy for each optimal first guess.
+    function precomputeFirstGuesses(wordList) {
+      firstGuessCache = optimalGuesses.map(guess => {
+        const ent = calculateEntropy(wordList, guess);
+        return { word: guess, entropy: ent };
+      });
+      cacheInitialized = true;
+    }
+
+    // Return the first guess from the precomputed cache that has the maximum entropy.
+    function getOptimalFirstGuess() {
+      let best = firstGuessCache[0];
+      firstGuessCache.forEach(item => {
+        if (item.entropy > best.entropy) {
+          best = item;
+        }
+      });
+      return best.word;
+    }
+
+    // For larger candidate lists, select a guess by sampling SAMPLE_SIZE random words and returning the one with highest entropy.
+    function selectEntropyGuess(wordList) {
+      let maxEntropy = -Infinity;
+      let bestWord = wordList[0];
+      for (let i = 0; i < SAMPLE_SIZE; i++) {
+        const index = Math.floor(Math.random() * wordList.length);
+        const candidate = wordList[index];
+        const ent = calculateEntropy(wordList, candidate);
+        if (ent > maxEntropy) {
+          maxEntropy = ent;
+          bestWord = candidate;
+        }
+      }
+      return bestWord;
+    }
+
+    // Calculate letter frequency counts per position.
+    function calculateFrequencies(wordList) {
+      // Initialize a 2D array for [position][letter]
+      const freq = Array.from({ length: WORD_LENGTH }, () => new Array(26).fill(0));
+      wordList.forEach(word => {
+        for (let pos = 0; pos < WORD_LENGTH; pos++) {
+          freq[pos][word.charCodeAt(pos) - 97]++;
+        }
+      });
+      return freq;
+    }
+
+    // Score a word based on letter frequencies.
+    function wordScore(word, freq) {
+      let score = 0;
+      for (let pos = 0; pos < WORD_LENGTH; pos++) {
+        score += freq[pos][word.charCodeAt(pos) - 97];
+      }
+      return score;
+    }
+
+    // Main guess selection logic.
+    function selectGuess(wordList) {
+      // On first guess, if the cache is available, use the precomputed optimal first guess.
+      if (!firstGuessUsed && cacheInitialized) {
+        firstGuessUsed = true;
+        return getOptimalFirstGuess();
+      }
+      // For large candidate lists, use entropy sampling.
+      if (wordList.length > 100) {
+        return selectEntropyGuess(wordList);
+      }
+      // Otherwise, use a frequency-based score.
+      const freq = calculateFrequencies(wordList);
+      let bestWord = wordList[0];
+      let maxScore = -1;
+      wordList.forEach(word => {
+        const score = wordScore(word, freq);
+        if (score > maxScore) {
+          maxScore = score;
+          bestWord = word;
+        }
+      });
+      return bestWord;
+    }
+
+    // Filter the current candidate list based on the provided feedback for the last guess.
+    function filterWords(guess, feedback, wordList) {
+      return wordList.filter(word => {
+        const tempFeedback = computeFeedback(guess, word);
+        // Compare feedback arrays
+        for (let i = 0; i < WORD_LENGTH; i++) {
+          if (tempFeedback[i] !== feedback[i]) return false;
+        }
+        return true;
+      });
+    }
+
+    // Append a message to the log area.
+    function logMessage(message, isError = false) {
+      const entry = document.createElement("div");
+      entry.className = "log-entry" + (isError ? " error" : "");
+      entry.textContent = message;
+      logEl.appendChild(entry);
+    }
+
+    /* ------------------------------
+       UI & Game Logic
+    ------------------------------ */
+
+    // Update the suggestion and attempt count in the UI.
+    function updateUI() {
+      if (remainingWords.length === 0) {
+        suggestionEl.textContent = "No possible words remain.";
+        submitButton.disabled = true;
+        return;
+      }
+      const guess = selectGuess(remainingWords);
+      suggestionEl.textContent = guess;
+      attemptEl.textContent = attemptCount.toString();
+    }
+
+    // Process the feedback input from the user.
+    function processFeedback() {
+      const guess = suggestionEl.textContent;
+      const fbStr = feedbackInput.value.trim();
+      if (fbStr.length !== WORD_LENGTH || !/^[0-2]+$/.test(fbStr)) {
+        logMessage("Invalid feedback. Please enter exactly 5 digits (0-2).", true);
+        return;
+      }
+      // Convert feedback string to an array of numbers.
+      const fbArray = fbStr.split("").map(ch => parseInt(ch, 10));
+      const solved = fbArray.every(val => val === 2);
+
+      logMessage(`Attempt ${attemptCount + 1}: Guess "${guess}" with feedback "${fbStr}"`);
+
+      if (solved) {
+        logMessage(`Solved in ${attemptCount + 1} attempts!`);
+        suggestionEl.textContent = "✓";
+        submitButton.disabled = true;
+        feedbackInput.disabled = true;
+        return;
+      }
+
+      // Filter the candidate words based on the feedback.
+      remainingWords = filterWords(guess, fbArray, remainingWords);
+      logMessage(`Remaining possible words: ${remainingWords.length}`);
+      attemptCount++;
+
+      if (attemptCount >= MAX_ATTEMPTS) {
+        if (remainingWords.length > 1) {
+          logMessage("Maximum attempts reached. Possible solutions:");
+          remainingWords.slice(0, 10).forEach(word => logMessage("  " + word));
+          if (remainingWords.length > 10) {
+            logMessage(`... and ${remainingWords.length - 10} more`);
+          }
+        }
+        suggestionEl.textContent = "Game Over";
+        submitButton.disabled = true;
+        feedbackInput.disabled = true;
+      } else {
+        feedbackInput.value = "";
+        updateUI();
+      }
+    }
+
+    // Event listener for the Submit button.
+    submitButton.addEventListener("click", processFeedback);
+    feedbackInput.addEventListener("keyup", function(event) {
+      if (event.key === "Enter") {
+        processFeedback();
+      }
+    });
+
+    /* ------------------------------
+       Initialization: Load word list
+    ------------------------------ */
+
+    // Fetch words.txt and initialize the solver.
+    function init() {
+      fetch("words.txt")
+        .then(response => {
+          if (!response.ok) {
+            throw new Error("Network response was not ok");
+          }
+          return response.text();
+        })
+        .then(text => {
+          // Split the file into lines and filter valid 5-letter words.
+          words = text.split(/\r?\n/).map(line => line.trim().toLowerCase())
+                        .filter(word => word.length === WORD_LENGTH);
+          if (words.length === 0) {
+            throw new Error("No valid words found in words.txt");
+          }
+          // Initialize the candidate list and precompute first guesses.
+          remainingWords = [...words];
+          precomputeFirstGuesses(words);
+          statusEl.style.display = "none";
+          solverEl.style.display = "block";
+          updateUI();
+        })
+        .catch(error => {
+          statusEl.textContent = "Error loading word list: " + error.message;
+          console.error(error);
+        });
+    }
+
+    // Start the app once the DOM is loaded.
+    document.addEventListener("DOMContentLoaded", init);
+  </script>
+</body>
+</html>
