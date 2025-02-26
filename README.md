@@ -1,2 +1,2 @@
 # wilson
-wordle guesser in memory of mr wilson the goat 
+mr wilson the goat
