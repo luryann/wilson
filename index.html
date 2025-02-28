@@ -135,7 +135,7 @@
 </head>
 <body>
   <div class="container">
-    <h1>Wordle Solver with Shannon Entropy</h1>
+    <h1>Wordle Solver</h1>
     <div id="game">
       <div id="status" class="status">Loading word list…</div>
       <div id="solver" style="display:none;">
@@ -159,7 +159,7 @@
         <!-- Debug Toggle and Panel (moved below the log) -->
         <div class="debug-toggle">
           <input type="checkbox" id="debugToggle">
-          <label for="debugToggle">Debug Mode</label>
+          <label for="debugToggle">Debug Mode (top candidates can be useful)</label>
         </div>
         <div id="debugPanel"></div>
       </div>
@@ -217,7 +217,7 @@
       });
       let entropy = 0;
       const total = wordList.length;
-      let debugStr = "Raw Shannon Entropy Calculations:\n";
+      let debugStr = "Entropy Calculations:\n";
       debugStr += `Total words: ${total}\n`;
       debugStr += "Pattern counts, probabilities, and contributions:\n";
       for (let i = 0; i < MAX_PATTERNS; i++) {
@@ -229,7 +229,7 @@
           debugStr += `Pattern ${i}: count=${count}, prob=${prob.toFixed(4)}, contribution=${contribution.toFixed(4)}\n`;
         }
       }
-      debugStr += `Total Shannon Entropy: ${entropy.toFixed(4)}\n`;
+      debugStr += `Total Entropy: ${entropy.toFixed(4)}\n`;
       return { entropy, debugStr };
     }
 
@@ -548,6 +548,11 @@
           precomputeFirstGuesses(words);
           statusEl.style.display = "none";
           solverEl.style.display = "block";
+
+          // Set debug toggle to checked by default
+          debugToggle.checked = true;
+          debugToggle.dispatchEvent(new Event("change")); // Trigger the change event to show the debug panel
+          
           updateUI();
         })
         .catch(error => {
