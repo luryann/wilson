@@ -3,9 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Wordle Solver – Hybrid Strategy</title>
+  <title>Wordle Solver</title>
   <style>
-    /* General Styles */
     body {
       font-family: Arial, sans-serif;
       background-color: #f5f5f5;
@@ -41,7 +40,7 @@
       margin-bottom: 0.5rem;
       font-weight: bold;
     }
-    /* Feedback Boxes */
+    /* Feedback Boxes Styles */
     #feedbackContainer {
       margin-bottom: 1rem;
     }
@@ -78,7 +77,7 @@
     .error {
       color: red;
     }
-    /* Suggested Guess */
+    /* Suggested Guess Styling */
     #suggestion {
       font-size: 1.8em;
       font-weight: bold;
@@ -90,7 +89,7 @@
       display: inline-block;
       margin-bottom: 1rem;
     }
-    /* Debug Panel */
+    /* Debug Panel Styles */
     #debugPanel {
       display: none;
       background: #eee;
@@ -136,7 +135,7 @@
 </head>
 <body>
   <div class="container">
-    <h1>Wordle Solver – Hybrid Strategy</h1>
+    <h1>Wordle Solver/h1>
     <div id="game">
       <div id="status" class="status">Loading word list…</div>
       <div id="solver" style="display:none;">
@@ -157,7 +156,7 @@
           <button id="restart">Restart Game</button>
         </div>
         <div id="log"></div>
-        <!-- Debug Toggle and Panel (placed below log) -->
+        <!-- Debug Toggle and Panel (moved below the log) -->
         <div class="debug-toggle">
           <input type="checkbox" id="debugToggle">
           <label for="debugToggle">Debug Mode</label>
@@ -173,22 +172,22 @@
     "use strict";
     // Constants
     const WORD_LENGTH = 5;
+    const MAX_PATTERNS = Math.pow(3, WORD_LENGTH);
     const SAMPLE_SIZE = 100;
     const MAX_ATTEMPTS = 6;
-    // Preselected optimal starting words (used for the first guess)
-    const optimalGuesses = ["salet", "crate", "raise", "roate"];
+    const optimalGuesses = ["salet", "crate", "raise", "roate"]; // Preselected optimal starting words
 
-    // Global state
-    let words = [];             // Complete word list
-    let remainingWords = [];    // Current candidate words
-    let firstGuessCache = [];   // Cache for first guesses (optimal starting words)
+    // Global state variables
+    let words = [];            // Complete word list
+    let remainingWords = [];   // Filtered candidate words
+    let firstGuessCache = [];  // Cache for optimal first guesses (using Shannon Entropy)
     let cacheInitialized = false;
     let attemptCount = 0;
     let firstGuessUsed = false;
     let debugMode = false;
     let debugDetails = "";
 
-    // UI elements
+    // UI Elements
     const statusEl = document.getElementById("status");
     const solverEl = document.getElementById("solver");
     const suggestionEl = document.getElementById("suggestion");
@@ -200,21 +199,46 @@
     const debugToggle = document.getElementById("debugToggle");
     const feedbackBoxes = Array.from(document.querySelectorAll('.feedback-box'));
 
-    /* ----------------------------------------
-       Hybrid Candidate Selection using a
-       weighted combination of entropy and frequency.
-       - For each candidate word, we compute an "entropy"
-         score (information gain) and a "frequency" score
-         (commonness based on letter frequency in the candidate set).
-       - Both scores are normalized (divided by the maximum
-         found among all candidates).
-       - The final hybrid score is:
-             hybridScore = w * (normalizedEntropy) + (1 - w) * (normalizedFrequency)
-         where w (0 ≤ w ≤ 1) is a weight parameter (default 0.5).
-    ---------------------------------------- */
-    const hybridWeight = 0.5; // Adjust weight (e.g., 0.5 gives equal weight)
+    /* --------------------------------------
+       Shannon Entropy Debug Helper Function
+       This function computes the entropy for a candidate word using Shannon’s formula:
+       H = - Σ p(i) log₂ p(i)
+       It returns both the entropy value and a detailed string of the raw calculations.
+    -------------------------------------- */
+    function calculateEntropyDebug(wordList, candidate) {
+      const patternCounts = new Array(MAX_PATTERNS).fill(0);
+      wordList.forEach(word => {
+        const feedback = computeFeedback(candidate, word);
+        let pattern = 0;
+        for (let i = 0; i < WORD_LENGTH; i++) {
+          pattern = pattern * 3 + feedback[i];
+        }
+        patternCounts[pattern]++;
+      });
+      let entropy = 0;
+      const total = wordList.length;
+      let debugStr = "Raw Shannon Entropy Calculations:\n";
+      debugStr += `Total words: ${total}\n`;
+      debugStr += "Pattern counts, probabilities, and contributions:\n";
+      for (let i = 0; i < MAX_PATTERNS; i++) {
+        if (patternCounts[i] > 0) {
+          const count = patternCounts[i];
+          const prob = count / total;
+          const contribution = - prob * Math.log2(prob);
+          entropy += contribution;
+          debugStr += `Pattern ${i}: count=${count}, prob=${prob.toFixed(4)}, contribution=${contribution.toFixed(4)}\n`;
+        }
+      }
+      debugStr += `Total Shannon Entropy: ${entropy.toFixed(4)}\n`;
+      return { entropy, debugStr };
+    }
 
-    // Compute feedback for a guess vs. a target word.
+    /* --------------------------------------
+       Utility Functions
+    -------------------------------------- */
+
+    // Compute feedback for a given guess compared to the target word.
+    // Returns an array with values: 0 (gray), 1 (yellow), or 2 (green).
     function computeFeedback(guess, target) {
       const feedback = new Array(WORD_LENGTH).fill(0);
       const count = new Array(26).fill(0);
@@ -236,30 +260,75 @@
       return feedback;
     }
 
-    // Calculate entropy for a candidate using the candidate word list.
-    // (Returns only the numeric value; raw details are omitted from the webpage.)
+    // Standard entropy calculation using the debug helper.
     function calculateEntropy(wordList, candidate) {
-      const patternCounts = new Array(Math.pow(3, WORD_LENGTH)).fill(0);
-      wordList.forEach(word => {
-        const fb = computeFeedback(candidate, word);
-        let pattern = 0;
-        for (let i = 0; i < WORD_LENGTH; i++) {
-          pattern = pattern * 3 + fb[i];
-        }
-        patternCounts[pattern]++;
-      });
-      let entropy = 0;
-      const total = wordList.length;
-      for (let i = 0; i < patternCounts.length; i++) {
-        if (patternCounts[i] > 0) {
-          const prob = patternCounts[i] / total;
-          entropy -= prob * Math.log2(prob);
-        }
-      }
-      return entropy;
+      return calculateEntropyDebug(wordList, candidate).entropy;
     }
 
-    // Compute letter frequency matrix over the candidate list.
+    // Precompute optimal first guess entropies (using Shannon Entropy).
+    function precomputeFirstGuesses(wordList) {
+      firstGuessCache = optimalGuesses.map(guess => {
+        const ent = calculateEntropy(wordList, guess);
+        return { word: guess, entropy: ent };
+      });
+      cacheInitialized = true;
+    }
+
+    // Return the best precomputed optimal first guess along with its raw calculations.
+    function getOptimalFirstGuess() {
+      let best = firstGuessCache[0];
+      let details = "Method: Precomputed Optimal First Guess (Using Shannon Entropy)\n";
+      details += `Candidate count (all words): ${words.length}\n\n`;
+      firstGuessCache.forEach(item => {
+        let debugInfo = "";
+        if (debugMode) {
+          const { debugStr } = calculateEntropyDebug(words, item.word);
+          debugInfo = debugStr;
+        }
+        details += `  ${item.word} => entropy ${item.entropy.toFixed(2)}\n${debugInfo}\n`;
+        if (item.entropy > best.entropy) {
+          best = item;
+        }
+      });
+      details += `Chosen: ${best.word}\n`;
+      if (debugMode) {
+         const { debugStr } = calculateEntropyDebug(words, best.word);
+         details += `Raw calculations for chosen candidate:\n${debugStr}\n`;
+      }
+      debugDetails = details;
+      return best.word;
+    }
+
+    // Select a candidate via entropy sampling using Shannon Entropy.
+    function selectEntropyGuess(wordList) {
+      let maxEntropy = -Infinity;
+      let bestWord = wordList[0];
+      let bestCandidateDebug = "";
+      let sampleRecords = [];
+      for (let i = 0; i < SAMPLE_SIZE; i++) {
+        const index = Math.floor(Math.random() * wordList.length);
+        const candidate = wordList[index];
+        const { entropy, debugStr } = calculateEntropyDebug(wordList, candidate);
+        sampleRecords.push({ candidate, entropy, debugStr });
+        if (entropy > maxEntropy) {
+          maxEntropy = entropy;
+          bestWord = candidate;
+          bestCandidateDebug = debugStr;
+        }
+      }
+      sampleRecords.sort((a, b) => b.entropy - a.entropy);
+      let details = "Method: Entropy Sampling (Using Shannon Entropy)\n";
+      details += `Candidate count: ${wordList.length}\nSamples taken: ${SAMPLE_SIZE}\n\nTop 3 Samples:\n`;
+      for (let i = 0; i < Math.min(3, sampleRecords.length); i++) {
+        details += `  ${sampleRecords[i].candidate} => entropy ${sampleRecords[i].entropy.toFixed(2)}\n`;
+      }
+      details += `Chosen candidate: ${bestWord} with entropy ${maxEntropy.toFixed(2)}\n`;
+      details += `Raw calculations for chosen candidate:\n${bestCandidateDebug}\n`;
+      debugDetails = details;
+      return bestWord;
+    }
+
+    // Calculate letter frequency counts per position.
     function calculateFrequencies(wordList) {
       const freq = Array.from({ length: WORD_LENGTH }, () => new Array(26).fill(0));
       wordList.forEach(word => {
@@ -270,8 +339,8 @@
       return freq;
     }
 
-    // Compute frequency score for a given word based on the frequency matrix.
-    function wordFrequencyScore(word, freq) {
+    // Compute a score for a word based on its letter frequency.
+    function wordScore(word, freq) {
       let score = 0;
       for (let pos = 0; pos < WORD_LENGTH; pos++) {
         score += freq[pos][word.charCodeAt(pos) - 97];
@@ -279,80 +348,51 @@
       return score;
     }
 
-    // Precompute first guess candidates (optimal starting words) using entropy.
-    function precomputeFirstGuesses(wordList) {
-      firstGuessCache = optimalGuesses.map(guess => ({
-        word: guess,
-        entropy: calculateEntropy(wordList, guess)
-      }));
-      cacheInitialized = true;
-    }
-
-    // Hybrid selection: combine normalized entropy and frequency score.
-    function selectHybridGuess(wordList) {
-      const freq = calculateFrequencies(wordList);
-      let maxEntropy = 0, maxFreq = 0;
-      const candidates = [];
-      wordList.forEach(word => {
-        const ent = calculateEntropy(wordList, word);
-        const freqScore = wordFrequencyScore(word, freq);
-        candidates.push({ word, ent, freqScore });
-        if (ent > maxEntropy) maxEntropy = ent;
-        if (freqScore > maxFreq) maxFreq = freqScore;
-      });
-      // Compute the weighted (hybrid) score for each candidate.
-      candidates.forEach(candidate => {
-        candidate.normalizedEnt = maxEntropy ? candidate.ent / maxEntropy : 0;
-        candidate.normalizedFreq = maxFreq ? candidate.freqScore / maxFreq : 0;
-        candidate.hybridScore = hybridWeight * candidate.normalizedEnt + (1 - hybridWeight) * candidate.normalizedFreq;
-      });
-      // Sort candidates by hybrid score (highest first).
-      candidates.sort((a, b) => b.hybridScore - a.hybridScore);
-      // For debugging (if enabled), store details about the top candidate.
-      if (debugMode) {
-        let details = "Hybrid Candidate Selection Details:\n";
-        details += `Total Candidates: ${wordList.length}\n`;
-        details += `Weighting: ${hybridWeight} for entropy, ${1 - hybridWeight} for frequency\n\n`;
-        details += "Top 3 Candidates:\n";
-        for (let i = 0; i < Math.min(3, candidates.length); i++) {
-          details += `  ${candidates[i].word}: entropy=${candidates[i].ent.toFixed(2)} ` +
-                     `(${candidates[i].normalizedEnt.toFixed(2)}), frequency=${candidates[i].freqScore} ` +
-                     `(${candidates[i].normalizedFreq.toFixed(2)}), hybridScore=${candidates[i].hybridScore.toFixed(2)}\n`;
-        }
-        debugDetails = details;
-      }
-      return candidates[0].word;
-    }
-
-    // Main candidate selection function.
+    // Main candidate selection logic – chooses between precomputed, entropy sampling, or frequency-based scoring.
     function selectGuess(wordList) {
       let header = `Attempt: ${attemptCount} | Remaining Candidates: ${wordList.length}\n\n`;
-      // Use precomputed optimal guess on the first attempt.
       if (!firstGuessUsed && cacheInitialized) {
-        const guess = firstGuessCache.reduce((best, item) =>
-          item.entropy > best.entropy ? item : best, firstGuessCache[0]).word;
-        debugDetails = header + "Method: Precomputed Optimal First Guess\nChosen: " + guess;
+        const guess = getOptimalFirstGuess();
+        debugDetails = header + debugDetails;
         firstGuessUsed = true;
         return guess;
       }
-      // Use hybrid selection for all subsequent guesses.
-      const guess = selectHybridGuess(wordList);
-      debugDetails = header + "Method: Hybrid Selection (Entropy + Frequency)";
-      return guess;
+      if (wordList.length > 100) {
+        const guess = selectEntropyGuess(wordList);
+        debugDetails = header + debugDetails;
+        return guess;
+      }
+      // Frequency-based scoring for small candidate sets.
+      const freq = calculateFrequencies(wordList);
+      const scoreRecords = wordList.map(word => ({
+        word,
+        score: wordScore(word, freq)
+      }));
+      scoreRecords.sort((a, b) => b.score - a.score);
+      const bestRecord = scoreRecords[0];
+      let freqMatrixStr = freq.map((row, pos) => `Pos ${pos}: [${row.join(', ')}]`).join('\n');
+      let details = "Method: Frequency-Based Scoring\n";
+      details += `Candidate count: ${wordList.length}\n\nFrequency Matrix:\n${freqMatrixStr}\n\nTop Candidates:\n`;
+      for (let i = 0; i < Math.min(3, scoreRecords.length); i++) {
+        details += `  ${scoreRecords[i].word} => score ${scoreRecords[i].score}\n`;
+      }
+      details += `Chosen candidate: ${bestRecord.word} with score ${bestRecord.score}\n`;
+      debugDetails = header + details;
+      return bestRecord.word;
     }
 
-    // Filter candidates based on user feedback.
+    // Filter candidate words based on provided feedback.
     function filterWords(guess, feedback, wordList) {
       return wordList.filter(word => {
-        const fb = computeFeedback(guess, word);
+        const tempFeedback = computeFeedback(guess, word);
         for (let i = 0; i < WORD_LENGTH; i++) {
-          if (fb[i] !== feedback[i]) return false;
+          if (tempFeedback[i] !== feedback[i]) return false;
         }
         return true;
       });
     }
 
-    // Append a message to the log.
+    // Append a log message.
     function logMessage(message, isError = false) {
       const entry = document.createElement("div");
       entry.className = "log-entry" + (isError ? " error" : "");
@@ -360,9 +400,11 @@
       logEl.appendChild(entry);
     }
 
-    /* ----------------------------------------
-       UI & Game Logic
-    ---------------------------------------- */
+    /* --------------------------------------
+       UI and Game Logic
+    -------------------------------------- */
+
+    // Update the UI: suggestion, attempt count, and debug panel.
     function updateUI() {
       if (remainingWords.length === 0) {
         suggestionEl.textContent = "No possible words remain.";
@@ -380,18 +422,20 @@
       }
     }
 
-    // Read feedback from individual boxes.
+    // Read feedback from the five feedback boxes.
     function getFeedbackFromBoxes() {
       const fbArray = [];
       for (let i = 0; i < WORD_LENGTH; i++) {
         const val = feedbackBoxes[i].value.trim();
-        if (!/^[0-2]$/.test(val)) return null;
+        if (!/^[0-2]$/.test(val)) {
+          return null;
+        }
         fbArray.push(parseInt(val, 10));
       }
       return fbArray;
     }
 
-    // Process user feedback.
+    // Process the user feedback.
     function processFeedback() {
       const guess = suggestionEl.textContent;
       const fbArray = getFeedbackFromBoxes();
@@ -399,8 +443,8 @@
         logMessage("Invalid feedback. Please enter digits 0-2 in all boxes.", true);
         return;
       }
-      logMessage(`Attempt ${attemptCount + 1}: Guess "${guess}" with feedback "${fbArray.join('')}"`);
       const solved = fbArray.every(val => val === 2);
+      logMessage(`Attempt ${attemptCount + 1}: Guess "${guess}" with feedback "${fbArray.join('')}"`);
       if (solved) {
         logMessage(`Solved in ${attemptCount + 1} attempts!`);
         suggestionEl.textContent = "✓";
@@ -442,12 +486,12 @@
       updateUI();
     }
 
-    /* ----------------------------------------
-       Feedback Boxes Navigation:
-         - Auto-advance on input/backspace.
-         - Navigate with left/right arrow keys.
-         - Enter key submits feedback.
-    ---------------------------------------- */
+    /* --------------------------------------
+       Feedback Boxes Navigation and Auto-Advance
+       - Auto-advance on input/backspace.
+       - Navigate with left/right arrow keys.
+       - Enter key submits feedback.
+    -------------------------------------- */
     feedbackBoxes.forEach((box, index) => {
       box.addEventListener("input", () => {
         if (box.value.length === 1 && index < WORD_LENGTH - 1) {
@@ -483,19 +527,23 @@
       }
     });
 
-    /* ----------------------------------------
+    /* --------------------------------------
        Initialization: Load word list from "words.txt"
-    ---------------------------------------- */
+    -------------------------------------- */
     function init() {
       fetch("words.txt")
         .then(response => {
-          if (!response.ok) throw new Error("Network response was not ok");
+          if (!response.ok) {
+            throw new Error("Network response was not ok");
+          }
           return response.text();
         })
         .then(text => {
           words = text.split(/\r?\n/).map(line => line.trim().toLowerCase())
                         .filter(word => word.length === WORD_LENGTH);
-          if (words.length === 0) throw new Error("No valid words found in words.txt");
+          if (words.length === 0) {
+            throw new Error("No valid words found in words.txt");
+          }
           remainingWords = [...words];
           precomputeFirstGuesses(words);
           statusEl.style.display = "none";
