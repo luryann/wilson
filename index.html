@@ -203,6 +203,37 @@
     const feedbackBoxes = Array.from(document.querySelectorAll('.feedback-box'));
 
     /* ------------------------------
+       Debug Helper: Calculate Entropy with Raw Math
+    ------------------------------ */
+    function calculateEntropyDebug(wordList, candidate) {
+      const patternCounts = new Array(MAX_PATTERNS).fill(0);
+      wordList.forEach(word => {
+        const feedback = computeFeedback(candidate, word);
+        let pattern = 0;
+        for (let i = 0; i < WORD_LENGTH; i++) {
+          pattern = pattern * 3 + feedback[i];
+        }
+        patternCounts[pattern]++;
+      });
+      let entropy = 0;
+      const total = wordList.length;
+      let debugStr = "Raw Mathematical Calculations:\n";
+      debugStr += `Total words: ${total}\n`;
+      debugStr += "Pattern counts and contributions:\n";
+      for (let i = 0; i < MAX_PATTERNS; i++) {
+        if (patternCounts[i] > 0) {
+          let count = patternCounts[i];
+          let prob = count / total;
+          let contribution = - prob * Math.log2(prob);
+          entropy += contribution;
+          debugStr += `Pattern ${i}: count=${count}, prob=${prob.toFixed(4)}, contribution=${contribution.toFixed(4)}\n`;
+        }
+      }
+      debugStr += `Total entropy: ${entropy.toFixed(4)}\n`;
+      return { entropy, debugStr };
+    }
+
+    /* ------------------------------
        Utility Functions
     ------------------------------ */
 
@@ -228,26 +259,9 @@
       return feedback;
     }
 
-    // Calculate entropy of a candidate given a list of words.
+    // Calculate entropy (without debug info) – used by non-debug paths.
     function calculateEntropy(wordList, candidate) {
-      const patternCounts = new Array(MAX_PATTERNS).fill(0);
-      wordList.forEach(word => {
-        const feedback = computeFeedback(candidate, word);
-        let pattern = 0;
-        for (let i = 0; i < WORD_LENGTH; i++) {
-          pattern = pattern * 3 + feedback[i];
-        }
-        patternCounts[pattern]++;
-      });
-      let entropy = 0;
-      const total = wordList.length;
-      patternCounts.forEach(count => {
-        if (count > 0) {
-          const prob = count / total;
-          entropy -= prob * Math.log2(prob);
-        }
-      });
-      return entropy;
+      return calculateEntropyDebug(wordList, candidate).entropy;
     }
 
     // Precompute optimal first guess entropies.
@@ -262,17 +276,25 @@
     // Return the best precomputed optimal first guess.
     function getOptimalFirstGuess() {
       let best = firstGuessCache[0];
+      let details = "Method: Precomputed Optimal First Guess\n";
+      details += `Candidate count (all words): ${words.length}\n\n`;
       firstGuessCache.forEach(item => {
+        let debugInfo = "";
+        if (debugMode) {
+          const { debugStr } = calculateEntropyDebug(words, item.word);
+          debugInfo = debugStr;
+        }
+        details += `  ${item.word} => entropy ${item.entropy.toFixed(2)}\n${debugInfo}\n`;
         if (item.entropy > best.entropy) {
           best = item;
         }
       });
-      debugDetails = "Method: Precomputed Optimal First Guess\n";
-      debugDetails += `Candidate count (all words): ${words.length}\n\n`;
-      firstGuessCache.forEach(item => {
-        debugDetails += `  ${item.word} => entropy ${item.entropy.toFixed(2)}\n`;
-      });
-      debugDetails += `Chosen: ${best.word}\n`;
+      details += `Chosen: ${best.word}\n`;
+      if (debugMode) {
+         const { debugStr } = calculateEntropyDebug(words, best.word);
+         details += `Raw calculations for chosen candidate:\n${debugStr}\n`;
+      }
+      debugDetails = details;
       return best.word;
     }
 
@@ -280,18 +302,19 @@
     function selectEntropyGuess(wordList) {
       let maxEntropy = -Infinity;
       let bestWord = wordList[0];
+      let bestCandidateDebug = "";
       let sampleRecords = [];
       for (let i = 0; i < SAMPLE_SIZE; i++) {
         const index = Math.floor(Math.random() * wordList.length);
         const candidate = wordList[index];
-        const ent = calculateEntropy(wordList, candidate);
-        sampleRecords.push({ candidate, entropy: ent });
-        if (ent > maxEntropy) {
-          maxEntropy = ent;
+        const { entropy, debugStr } = calculateEntropyDebug(wordList, candidate);
+        sampleRecords.push({ candidate, entropy, debugStr });
+        if (entropy > maxEntropy) {
+          maxEntropy = entropy;
           bestWord = candidate;
+          bestCandidateDebug = debugStr;
         }
       }
-      // Sort samples descending by entropy and pick the top 3.
       sampleRecords.sort((a, b) => b.entropy - a.entropy);
       let details = "Method: Entropy Sampling\n";
       details += `Candidate count: ${wordList.length}\nSamples taken: ${SAMPLE_SIZE}\n\nTop 3 Samples:\n`;
@@ -299,6 +322,7 @@
         details += `  ${sampleRecords[i].candidate} => entropy ${sampleRecords[i].entropy.toFixed(2)}\n`;
       }
       details += `Chosen candidate: ${bestWord} with entropy ${maxEntropy.toFixed(2)}\n`;
+      details += `Raw calculations for chosen candidate:\n${bestCandidateDebug}\n`;
       debugDetails = details;
       return bestWord;
     }
@@ -462,7 +486,7 @@
     }
 
     /* ------------------------------
-       Auto-advance for feedback boxes and Enter key submission.
+       Auto-advance for feedback boxes, arrow key navigation, and Enter key submission.
     ------------------------------ */
     feedbackBoxes.forEach((box, index) => {
       box.addEventListener("input", () => {
@@ -473,6 +497,12 @@
       box.addEventListener("keydown", (e) => {
         if (e.key === "Backspace" && box.value === "" && index > 0) {
           feedbackBoxes[index - 1].focus();
+        }
+        if (e.key === "ArrowLeft" && index > 0) {
+          feedbackBoxes[index - 1].focus();
+        }
+        if (e.key === "ArrowRight" && index < WORD_LENGTH - 1) {
+          feedbackBoxes[index + 1].focus();
         }
       });
       box.addEventListener("keyup", (e) => {
