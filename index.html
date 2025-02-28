@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Wordle Solver</title>
   <style>
-    /* CSS styles for a clean, modern interface */
     body {
       font-family: Arial, sans-serif;
       background-color: #f5f5f5;
@@ -22,7 +21,7 @@
       background: #fff;
       padding: 2rem;
       border-radius: 8px;
-      box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
     }
     h1 {
       text-align: center;
@@ -41,7 +40,7 @@
       margin-bottom: 0.5rem;
       font-weight: bold;
     }
-    /* Styles for the individual feedback boxes */
+    /* Feedback Boxes Styles */
     #feedbackContainer {
       margin-bottom: 1rem;
     }
@@ -55,6 +54,7 @@
       margin-right: 0.5rem;
       display: inline-block;
     }
+    /* Button Styles */
     button {
       padding: 0.6rem 1rem;
       font-size: 1rem;
@@ -68,6 +68,7 @@
     button:disabled {
       background-color: #aaa;
     }
+    /* Log and Error Messages */
     .log-entry {
       margin-bottom: 0.5rem;
       padding: 0.5rem;
@@ -76,7 +77,7 @@
     .error {
       color: red;
     }
-    /* Style for the suggested word */
+    /* Suggested Guess Styling */
     #suggestion {
       font-size: 1.8em;
       font-weight: bold;
@@ -88,7 +89,7 @@
       display: inline-block;
       margin-bottom: 1rem;
     }
-    /* Debug panel styling */
+    /* Debug Panel Styles */
     #debugPanel {
       display: none;
       background: #eee;
@@ -98,7 +99,6 @@
       font-size: 0.9em;
       white-space: pre-wrap;
     }
-    /* Debug toggle container */
     .debug-toggle {
       display: flex;
       align-items: center;
@@ -107,7 +107,7 @@
     .debug-toggle input {
       margin-right: 0.5rem;
     }
-    /* Footer styling */
+    /* Footer */
     footer {
       position: fixed;
       bottom: 10px;
@@ -115,7 +115,7 @@
       font-size: 0.8em;
       color: #777;
     }
-    /* Mobile responsiveness */
+    /* Mobile Responsiveness */
     @media (max-width: 600px) {
       .container {
         padding: 1rem;
@@ -135,14 +135,14 @@
 </head>
 <body>
   <div class="container">
-    <h1>Wordle Solver</h1>
+    <h1>Wordle Solver with Shannon Entropy</h1>
     <div id="game">
       <div id="status" class="status">Loading word list…</div>
       <div id="solver" style="display:none;">
         <p><strong>Suggested Guess:</strong> <span id="suggestion"></span></p>
         <p><strong>Attempt:</strong> <span id="attemptCount">0</span> / 6</p>
         
-        <!-- Feedback input boxes -->
+        <!-- Feedback Input Boxes -->
         <label for="feedback">Enter Feedback (5 digits, 0=gray, 1=yellow, 2=green):</label>
         <div id="feedbackContainer">
           <input type="text" class="feedback-box" id="feedback0" maxlength="1" pattern="[0-2]" inputmode="numeric">
@@ -156,7 +156,7 @@
           <button id="restart">Restart Game</button>
         </div>
         <div id="log"></div>
-        <!-- Debug Mode Toggle and Panel moved under the log -->
+        <!-- Debug Toggle and Panel (moved below the log) -->
         <div class="debug-toggle">
           <input type="checkbox" id="debugToggle">
           <label for="debugToggle">Debug Mode</label>
@@ -170,25 +170,24 @@
   </footer>
   <script>
     "use strict";
-
     // Constants
     const WORD_LENGTH = 5;
     const MAX_PATTERNS = Math.pow(3, WORD_LENGTH);
     const SAMPLE_SIZE = 100;
     const MAX_ATTEMPTS = 6;
-    const optimalGuesses = ["salet", "crate", "raise", "roate"];
+    const optimalGuesses = ["salet", "crate", "raise", "roate"]; // Preselected optimal starting words
 
     // Global state variables
-    let words = [];              // Full word list
-    let remainingWords = [];     // Candidate words after filtering
-    let firstGuessCache = [];    // Cache for optimal first guesses
+    let words = [];            // Complete word list
+    let remainingWords = [];   // Filtered candidate words
+    let firstGuessCache = [];  // Cache for optimal first guesses (using Shannon Entropy)
     let cacheInitialized = false;
     let attemptCount = 0;
     let firstGuessUsed = false;
     let debugMode = false;
     let debugDetails = "";
 
-    // UI elements
+    // UI Elements
     const statusEl = document.getElementById("status");
     const solverEl = document.getElementById("solver");
     const suggestionEl = document.getElementById("suggestion");
@@ -198,13 +197,14 @@
     const logEl = document.getElementById("log");
     const debugPanel = document.getElementById("debugPanel");
     const debugToggle = document.getElementById("debugToggle");
-
-    // Feedback boxes array (we have 5 boxes)
     const feedbackBoxes = Array.from(document.querySelectorAll('.feedback-box'));
 
-    /* ------------------------------
-       Debug Helper: Calculate Entropy with Raw Math
-    ------------------------------ */
+    /* --------------------------------------
+       Shannon Entropy Debug Helper Function
+       This function computes the entropy for a candidate word using Shannon’s formula:
+       H = - Σ p(i) log₂ p(i)
+       It returns both the entropy value and a detailed string of the raw calculations.
+    -------------------------------------- */
     function calculateEntropyDebug(wordList, candidate) {
       const patternCounts = new Array(MAX_PATTERNS).fill(0);
       wordList.forEach(word => {
@@ -217,27 +217,28 @@
       });
       let entropy = 0;
       const total = wordList.length;
-      let debugStr = "Raw Mathematical Calculations:\n";
+      let debugStr = "Raw Shannon Entropy Calculations:\n";
       debugStr += `Total words: ${total}\n`;
-      debugStr += "Pattern counts and contributions:\n";
+      debugStr += "Pattern counts, probabilities, and contributions:\n";
       for (let i = 0; i < MAX_PATTERNS; i++) {
         if (patternCounts[i] > 0) {
-          let count = patternCounts[i];
-          let prob = count / total;
-          let contribution = - prob * Math.log2(prob);
+          const count = patternCounts[i];
+          const prob = count / total;
+          const contribution = - prob * Math.log2(prob);
           entropy += contribution;
           debugStr += `Pattern ${i}: count=${count}, prob=${prob.toFixed(4)}, contribution=${contribution.toFixed(4)}\n`;
         }
       }
-      debugStr += `Total entropy: ${entropy.toFixed(4)}\n`;
+      debugStr += `Total Shannon Entropy: ${entropy.toFixed(4)}\n`;
       return { entropy, debugStr };
     }
 
-    /* ------------------------------
+    /* --------------------------------------
        Utility Functions
-    ------------------------------ */
+    -------------------------------------- */
 
-    // Compute the feedback for a given guess compared to the target word.
+    // Compute feedback for a given guess compared to the target word.
+    // Returns an array with values: 0 (gray), 1 (yellow), or 2 (green).
     function computeFeedback(guess, target) {
       const feedback = new Array(WORD_LENGTH).fill(0);
       const count = new Array(26).fill(0);
@@ -259,12 +260,12 @@
       return feedback;
     }
 
-    // Calculate entropy (without debug info) – used by non-debug paths.
+    // Standard entropy calculation using the debug helper.
     function calculateEntropy(wordList, candidate) {
       return calculateEntropyDebug(wordList, candidate).entropy;
     }
 
-    // Precompute optimal first guess entropies.
+    // Precompute optimal first guess entropies (using Shannon Entropy).
     function precomputeFirstGuesses(wordList) {
       firstGuessCache = optimalGuesses.map(guess => {
         const ent = calculateEntropy(wordList, guess);
@@ -273,10 +274,10 @@
       cacheInitialized = true;
     }
 
-    // Return the best precomputed optimal first guess.
+    // Return the best precomputed optimal first guess along with its raw calculations.
     function getOptimalFirstGuess() {
       let best = firstGuessCache[0];
-      let details = "Method: Precomputed Optimal First Guess\n";
+      let details = "Method: Precomputed Optimal First Guess (Using Shannon Entropy)\n";
       details += `Candidate count (all words): ${words.length}\n\n`;
       firstGuessCache.forEach(item => {
         let debugInfo = "";
@@ -298,7 +299,7 @@
       return best.word;
     }
 
-    // Select a candidate via entropy sampling.
+    // Select a candidate via entropy sampling using Shannon Entropy.
     function selectEntropyGuess(wordList) {
       let maxEntropy = -Infinity;
       let bestWord = wordList[0];
@@ -316,7 +317,7 @@
         }
       }
       sampleRecords.sort((a, b) => b.entropy - a.entropy);
-      let details = "Method: Entropy Sampling\n";
+      let details = "Method: Entropy Sampling (Using Shannon Entropy)\n";
       details += `Candidate count: ${wordList.length}\nSamples taken: ${SAMPLE_SIZE}\n\nTop 3 Samples:\n`;
       for (let i = 0; i < Math.min(3, sampleRecords.length); i++) {
         details += `  ${sampleRecords[i].candidate} => entropy ${sampleRecords[i].entropy.toFixed(2)}\n`;
@@ -338,7 +339,7 @@
       return freq;
     }
 
-    // Compute a score for a word based on its letter frequencies.
+    // Compute a score for a word based on its letter frequency.
     function wordScore(word, freq) {
       let score = 0;
       for (let pos = 0; pos < WORD_LENGTH; pos++) {
@@ -347,7 +348,7 @@
       return score;
     }
 
-    // Main guess selection logic.
+    // Main candidate selection logic – chooses between precomputed, entropy sampling, or frequency-based scoring.
     function selectGuess(wordList) {
       let header = `Attempt: ${attemptCount} | Remaining Candidates: ${wordList.length}\n\n`;
       if (!firstGuessUsed && cacheInitialized) {
@@ -361,7 +362,7 @@
         debugDetails = header + debugDetails;
         return guess;
       }
-      // Use frequency-based scoring when candidate count is small.
+      // Frequency-based scoring for small candidate sets.
       const freq = calculateFrequencies(wordList);
       const scoreRecords = wordList.map(word => ({
         word,
@@ -380,7 +381,7 @@
       return bestRecord.word;
     }
 
-    // Filter candidate words based on the provided feedback.
+    // Filter candidate words based on provided feedback.
     function filterWords(guess, feedback, wordList) {
       return wordList.filter(word => {
         const tempFeedback = computeFeedback(guess, word);
@@ -391,7 +392,7 @@
       });
     }
 
-    // Append a message to the log area.
+    // Append a log message.
     function logMessage(message, isError = false) {
       const entry = document.createElement("div");
       entry.className = "log-entry" + (isError ? " error" : "");
@@ -399,11 +400,11 @@
       logEl.appendChild(entry);
     }
 
-    /* ------------------------------
-       UI & Game Logic
-    ------------------------------ */
+    /* --------------------------------------
+       UI and Game Logic
+    -------------------------------------- */
 
-    // Update UI: suggestion, attempt count, and debug panel.
+    // Update the UI: suggestion, attempt count, and debug panel.
     function updateUI() {
       if (remainingWords.length === 0) {
         suggestionEl.textContent = "No possible words remain.";
@@ -421,7 +422,7 @@
       }
     }
 
-    // Read feedback from the five individual boxes.
+    // Read feedback from the five feedback boxes.
     function getFeedbackFromBoxes() {
       const fbArray = [];
       for (let i = 0; i < WORD_LENGTH; i++) {
@@ -434,7 +435,7 @@
       return fbArray;
     }
 
-    // Process user feedback.
+    // Process the user feedback.
     function processFeedback() {
       const guess = suggestionEl.textContent;
       const fbArray = getFeedbackFromBoxes();
@@ -471,7 +472,7 @@
       }
     }
 
-    // Restart the game by resetting state and UI.
+    // Restart the game.
     function restartGame() {
       attemptCount = 0;
       firstGuessUsed = false;
@@ -485,9 +486,12 @@
       updateUI();
     }
 
-    /* ------------------------------
-       Auto-advance for feedback boxes, arrow key navigation, and Enter key submission.
-    ------------------------------ */
+    /* --------------------------------------
+       Feedback Boxes Navigation and Auto-Advance
+       - Auto-advance on input/backspace.
+       - Navigate with left/right arrow keys.
+       - Enter key submits feedback.
+    -------------------------------------- */
     feedbackBoxes.forEach((box, index) => {
       box.addEventListener("input", () => {
         if (box.value.length === 1 && index < WORD_LENGTH - 1) {
@@ -523,9 +527,9 @@
       }
     });
 
-    /* ------------------------------
-       Initialization: Load word list
-    ------------------------------ */
+    /* --------------------------------------
+       Initialization: Load word list from "words.txt"
+    -------------------------------------- */
     function init() {
       fetch("words.txt")
         .then(response => {
