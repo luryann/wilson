@@ -2,281 +2,424 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include <stdbool.h>
 #include <math.h>
 #include <time.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#include <conio.h>
+#else
+#include <termios.h>
+#include <unistd.h>
+#endif
+
 #define WORD_LENGTH 5
-#define MAX_WORDS 12972
-#define ALPHABET 26
-#define MAX_PATTERNS 243  // 3^5
-#define SAMPLE_SIZE 100   // For entropy sampling
+#define MAX_ATTEMPTS 6
+#define SAMPLE_SIZE 100
+#define MAX_WORDS 20000
+#define OPTIMAL_FIRST_COUNT 4
+
+// ANSI Escape Codes for colors
+#define COLOR_RESET   "\x1b[0m"
+#define COLOR_GRAY    "\x1b[90m"
+#define COLOR_YELLOW  "\x1b[93m"
+#define COLOR_GREEN   "\x1b[92m"
 
 typedef struct {
-    unsigned short position[WORD_LENGTH][ALPHABET];
-} FrequencyMap;
+    char** words;
+    int count;
+} WordList;
 
-typedef struct {
-    char word[WORD_LENGTH + 1];
-    float entropy;
-} EntropyCache;
+const char* optimal_first[] = { "salet", "crate", "raise", "roate" };
 
-// Precomputed optimal first guesses with their entropy values
-const char* optimal_guesses[] = { "salet", "crate", "raise", "roate" };
-EntropyCache first_guess_cache[4];
-bool cache_initialized = false;
+// Windows terminal control functions
+#ifdef _WIN32
+HANDLE hStdin;
+DWORD fdwSaveOldMode;
 
-// Custom strdup implementation
-char* my_strdup(const char* s) {
-    size_t size = strlen(s) + 1;
-    char* p = malloc(size);
-    if (p) memcpy(p, s, size);
-    return p;
+void enable_raw_mode() {
+    hStdin = GetStdHandle(STD_INPUT_HANDLE);
+    GetConsoleMode(hStdin, &fdwSaveOldMode);
+    DWORD mode = fdwSaveOldMode & ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT);
+    SetConsoleMode(hStdin, mode);
 }
 
-// Compute feedback pattern
-void compute_feedback(const char* guess, const char* target, int* feedback) {
-    int count[ALPHABET] = { 0 };
-    memset(feedback, 0, WORD_LENGTH * sizeof(int));
+void disable_raw_mode() {
+    SetConsoleMode(hStdin, fdwSaveOldMode);
+}
 
+#else
+// Unix terminal control functions
+void enable_raw_mode() {
+    struct termios term;
+    tcgetattr(STDIN_FILENO, &term);
+    term.c_lflag &= ~(ICANON | ECHO);
+    tcsetattr(STDIN_FILENO, TCSANOW, &term);
+}
+
+void disable_raw_mode() {
+    struct termios term;
+    tcgetattr(STDIN_FILENO, &term);
+    term.c_lflag |= ICANON | ECHO;
+    tcsetattr(STDIN_FILENO, TCSANOW, &term);
+}
+#endif
+
+// Simplified display functions
+void print_colored_letter(char c, int feedback) {
+    const char* color = COLOR_RESET;
+    switch (feedback) {
+    case 0: color = COLOR_GRAY; break;
+    case 1: color = COLOR_YELLOW; break;
+    case 2: color = COLOR_GREEN; break;
+    }
+    printf("%s%c%s ", color, toupper(c), COLOR_RESET);
+}
+
+void print_guess(const char* guess, const int* feedback) {
     for (int i = 0; i < WORD_LENGTH; i++) {
-        count[target[i] - 'a']++;
+        if (feedback[i] >= 0) {
+            print_colored_letter(guess[i], feedback[i]);
+        }
+        else {
+            printf("%c ", toupper(guess[i]));
+        }
     }
+    printf("\n");
+}
 
+void print_input_boxes(const int* feedback) {
+    printf("Enter feedback (0-2): ");
     for (int i = 0; i < WORD_LENGTH; i++) {
-        if (guess[i] == target[i]) {
-            feedback[i] = 2;
-            count[guess[i] - 'a']--;
+        if (feedback[i] >= 0) {
+            printf("[%d]", feedback[i]);
+        }
+        else {
+            printf("[ ]");
+        }
+    }
+    printf("\r");
+    fflush(stdout);
+}
+
+// Enhanced input handling with Windows support
+int get_feedback(int feedback[], const char* guess) {
+    memset(feedback, -1, WORD_LENGTH * sizeof(int));
+    int position = 0;
+
+    printf("\nCurrent guess: ");
+    print_guess(guess, feedback);
+    printf("(0=gray, 1=yellow, 2=green)\n");
+    print_input_boxes(feedback);
+
+    enable_raw_mode();
+
+    while (1) {
+#ifdef _WIN32
+        INPUT_RECORD irInBuf[128];
+        DWORD cNumRead;
+
+        if (!ReadConsoleInput(hStdin, irInBuf, 128, &cNumRead)) continue;
+
+        for (DWORD i = 0; i < cNumRead; i++) {
+            if (irInBuf[i].EventType == KEY_EVENT && irInBuf[i].Event.KeyEvent.bKeyDown) {
+                KEY_EVENT_RECORD ker = irInBuf[i].Event.KeyEvent;
+
+                if (ker.wVirtualKeyCode == VK_LEFT) {
+                    position = position > 0 ? position - 1 : 0;
+                }
+                else if (ker.wVirtualKeyCode == VK_RIGHT) {
+                    position = position < WORD_LENGTH - 1 ? position + 1 : WORD_LENGTH - 1;
+                }
+                else if (ker.uChar.AsciiChar >= '0' && ker.uChar.AsciiChar <= '2') {
+                    feedback[position] = ker.uChar.AsciiChar - '0';
+                    position = position < WORD_LENGTH - 1 ? position + 1 : WORD_LENGTH - 1;
+                }
+                else if (ker.wVirtualKeyCode == VK_BACK) {
+                    feedback[position] = -1;
+                    position = position > 0 ? position - 1 : 0;
+                }
+                else if (ker.wVirtualKeyCode == VK_RETURN) {
+#else
+        int c = getchar();
+
+        if (c == 27) { // Handle arrow keys
+            getchar(); // Skip [
+            switch (getchar()) {
+            case 'D': position = position > 0 ? position - 1 : 0; break;
+            case 'C': position = position < WORD_LENGTH - 1 ? position + 1 : WORD_LENGTH - 1; break;
+            }
+        }
+        else if (c >= '0' && c <= '2') {
+            feedback[position] = c - '0';
+            position = position < WORD_LENGTH - 1 ? position + 1 : WORD_LENGTH - 1;
+        }
+        else if (c == 127 || c == 8) { // Backspace/Delete
+            feedback[position] = -1;
+            position = position > 0 ? position - 1 : 0;
+        }
+        else if (c == '\n') {
+#endif
+            int complete = 1;
+            for (int i = 0; i < WORD_LENGTH; i++) {
+                if (feedback[i] < 0 || feedback[i] > 2) {
+                    complete = 0;
+                    break;
+                }
+            }
+            if (complete) {
+                disable_raw_mode();
+                return 1;
+            }
+        }
+#ifdef _WIN32
+                }
+            }
+#endif
+
+// Update display
+printf("\x1b[2K"); // Clear line
+print_input_boxes(feedback);
         }
     }
 
-    for (int i = 0; i < WORD_LENGTH; i++) {
-        if (feedback[i] != 2 && count[guess[i] - 'a'] > 0) {
-            feedback[i] = 1;
-            count[guess[i] - 'a']--;
+    WordList read_words(const char* filename) {
+        FILE* file = fopen(filename, "r");
+        WordList list = { malloc(MAX_WORDS * sizeof(char*)), 0 };
+
+        if (!file) {
+            fprintf(stderr, "Error opening file: %s\n", filename);
+            return list;
         }
-    }
-}
 
-// Calculate entropy for a candidate word
-float calculate_entropy(char** words, int count, const char* candidate) {
-    int pattern_counts[MAX_PATTERNS] = { 0 };
+        char line[32];
+        while (fgets(line, sizeof(line), file) != NULL) {
+            line[strcspn(line, "\n")] = '\0';
+            for (int i = 0; line[i]; i++) {
+                line[i] = tolower(line[i]);
+            }
 
-    for (int i = 0; i < count; i++) {
-        int feedback[WORD_LENGTH];
-        compute_feedback(candidate, words[i], feedback);
+            if (strlen(line) != WORD_LENGTH) continue;
 
-        int pattern = 0;
-        for (int j = 0; j < WORD_LENGTH; j++) {
-            pattern = pattern * 3 + feedback[j];
+            int valid = 1;
+            for (int i = 0; i < WORD_LENGTH; i++) {
+                if (!isalpha(line[i])) {
+                    valid = 0;
+                    break;
+                }
+            }
+
+            if (valid) {
+                list.words[list.count] = _strdup(line);
+                list.count++;
+                if (list.count >= MAX_WORDS) break;
+            }
         }
-        pattern_counts[pattern]++;
-    }
 
-    float entropy = 0.0;
-    for (int i = 0; i < MAX_PATTERNS; i++) {
-        if (pattern_counts[i] > 0) {
-            float prob = (float)pattern_counts[i] / count;
-            // Fix for line 80: Explicit cast from double to float
-            entropy -= prob * (float)log2(prob);
-        }
-    }
-    return entropy;
-}
-
-// Precompute entropy for optimal first guesses
-void precompute_first_guesses(char** words, int total_words) {
-    for (int i = 0; i < 4; i++) {
-        // Fix for line 89: Using strncpy_s instead of strncpy
-        strncpy_s(first_guess_cache[i].word, sizeof(first_guess_cache[i].word), optimal_guesses[i], WORD_LENGTH);
-        first_guess_cache[i].entropy = calculate_entropy(words, total_words, optimal_guesses[i]);
-    }
-    cache_initialized = true;
-}
-
-// Select the best first guess
-const char* get_optimal_first_guess() {
-    float max_entropy = -1.0;
-    int best_index = 0;
-
-    for (int i = 0; i < 4; i++) {
-        if (first_guess_cache[i].entropy > max_entropy) {
-            max_entropy = first_guess_cache[i].entropy;
-            best_index = i;
-        }
-    }
-    return first_guess_cache[best_index].word;
-}
-
-// Select guess using entropy sampling
-const char* select_entropy_guess(char** words, int count) {
-    float max_entropy = -1.0;
-    const char* best_word = words[0];
-
-    for (int i = 0; i < SAMPLE_SIZE; i++) {
-        int index = rand() % count;
-        float entropy = calculate_entropy(words, count, words[index]);
-        if (entropy > max_entropy) {
-            max_entropy = entropy;
-            best_word = words[index];
-        }
-    }
-    return best_word;
-}
-
-// Calculate letter frequencies
-void calculate_frequencies(char** words, int count, FrequencyMap* freq) {
-    memset(freq, 0, sizeof(FrequencyMap));
-    for (int i = 0; i < count; i++) {
-        const char* word = words[i];
-        for (int pos = 0; pos < WORD_LENGTH; pos++) {
-            freq->position[pos][word[pos] - 'a']++;
-        }
-    }
-}
-
-// Score word based on letter frequencies
-int word_score(const char* word, const FrequencyMap* freq) {
-    int score = 0;
-    for (int pos = 0; pos < WORD_LENGTH; pos++) {
-        score += freq->position[pos][word[pos] - 'a'];
-    }
-    return score;
-}
-
-// Main guess selection logic
-const char* select_guess(char** words, int count) {
-    static bool first_guess = true;
-
-    if (first_guess && cache_initialized) {
-        first_guess = false;
-        return get_optimal_first_guess();
-    }
-
-    if (count > 100) {
-        return select_entropy_guess(words, count);
-    }
-
-    FrequencyMap freq;
-    calculate_frequencies(words, count, &freq);
-
-    int max_score = -1;
-    const char* best_word = words[0];
-    for (int i = 0; i < count; i++) {
-        int score = word_score(words[i], &freq);
-        if (score > max_score) {
-            max_score = score;
-            best_word = words[i];
-        }
-    }
-    return best_word;
-}
-
-// Main function
-int main() {
-    // Fix for line 175: Explicit cast from time_t to unsigned int
-    srand((unsigned int)time(NULL));
-    FILE* file = fopen("words.txt", "r");
-    if (!file) {
-        fprintf(stderr, "Error: Could not open words.txt\n");
-        return 1;
-    }
-
-    char** words = malloc(MAX_WORDS * sizeof(char*));
-    if (!words) {
-        fprintf(stderr, "Memory allocation failed\n");
         fclose(file);
-        return 1;
+        return list;
     }
 
-    int word_count = 0;
-    char buffer[WORD_LENGTH + 2];
+    void free_words(WordList * list) {
+        for (int i = 0; i < list->count; i++) {
+            free(list->words[i]);
+        }
+        free(list->words);
+        list->count = 0;
+    }
 
-    while (fgets(buffer, sizeof(buffer), file) && word_count < MAX_WORDS) {
-        buffer[WORD_LENGTH] = '\0';
+    void compute_feedback(const char* guess, const char* target, int* feedback) {
+        int count[26] = { 0 };
+        int temp_fb[WORD_LENGTH] = { 0 };
+
         for (int i = 0; i < WORD_LENGTH; i++) {
-            if (!islower(buffer[i])) {
-                buffer[i] = tolower(buffer[i]);
-            }
-        }
-        words[word_count] = my_strdup(buffer);
-        if (!words[word_count]) {
-            fprintf(stderr, "Memory allocation failed\n");
-            break;
-        }
-        word_count++;
-    }
-    fclose(file);
-
-    if (word_count == 0) {
-        fprintf(stderr, "No valid words loaded\n");
-        free(words);
-        return 1;
-    }
-
-    precompute_first_guesses(words, word_count);
-
-    int remaining = word_count;
-    int attempts = 0;
-    char feedback_str[6];
-    int feedback[WORD_LENGTH];
-
-    while (attempts < 6 && remaining > 0) {
-        const char* guess = select_guess(words, remaining);
-        printf("Suggested guess: %s\n", guess);
-        printf("Enter feedback (5 digits, 0=gray, 1=yellow, 2=green): ");
-
-        if (scanf_s("%5s", feedback_str, (unsigned)_countof(feedback_str)) != 1) {
-            fprintf(stderr, "Error reading input\n");
-            break;
+            count[target[i] - 'a']++;
         }
 
-        bool valid = true;
-        bool solved = true;
         for (int i = 0; i < WORD_LENGTH; i++) {
-            if (feedback_str[i] < '0' || feedback_str[i] > '2') {
-                valid = false;
-            }
-            feedback[i] = feedback_str[i] - '0';
-            if (feedback[i] != 2) solved = false;
-        }
-
-        if (!valid) {
-            printf("Invalid feedback. Use digits 0-2.\n");
-            continue;
-        }
-
-        if (solved) {
-            printf("Solved in %d attempts!\n", attempts + 1);
-            break;
-        }
-
-        // Filter words based on feedback
-        int new_count = 0;
-        for (int i = 0; i < remaining; i++) {
-            int temp_feedback[WORD_LENGTH];
-            compute_feedback(guess, words[i], temp_feedback);
-            if (memcmp(feedback, temp_feedback, sizeof(feedback)) == 0) {
-                words[new_count++] = words[i];
+            if (guess[i] == target[i]) {
+                temp_fb[i] = 2;
+                count[guess[i] - 'a']--;
             }
         }
-        remaining = new_count;
-        printf("Remaining possible words: %d\n", remaining);
-        attempts++;
-    }
 
-    if (remaining > 1 && attempts == 6) {
-        printf("Possible solutions:\n");
-        for (int i = 0; i < remaining && i < 10; i++) {
-            printf("  %s\n", words[i]);
+        for (int i = 0; i < WORD_LENGTH; i++) {
+            if (temp_fb[i] != 2 && count[guess[i] - 'a'] > 0) {
+                temp_fb[i] = 1;
+                count[guess[i] - 'a']--;
+            }
         }
-        if (remaining > 10) printf("... and %d more\n", remaining - 10);
+
+        memcpy(feedback, temp_fb, WORD_LENGTH * sizeof(int));
     }
 
-    for (int i = 0; i < word_count; i++) {
-        free(words[i]);
-    }
-    free(words);
+    WordList filter_words(const WordList * list, const char* guess, const int* feedback) {
+        WordList filtered = { malloc(list->count * sizeof(char*)), 0 };
+        int expected_fb[WORD_LENGTH];
 
-    return 0;
-}
+        for (int i = 0; i < list->count; i++) {
+            compute_feedback(guess, list->words[i], expected_fb);
+            if (memcmp(feedback, expected_fb, WORD_LENGTH * sizeof(int)) == 0) {
+                filtered.words[filtered.count++] = list->words[i];
+            }
+        }
+
+        return filtered;
+    }
+
+    char* select_guess(const WordList * list, int attempt, int* first_used) {
+        if (list->count == 0) return NULL;
+
+        if (!*first_used) {
+            for (int i = 0; i < OPTIMAL_FIRST_COUNT; i++) {
+                for (int j = 0; j < list->count; j++) {
+                    if (strcmp(optimal_first[i], list->words[j]) == 0) {
+                        *first_used = 1;
+                        return list->words[j];
+                    }
+                }
+            }
+        }
+
+        if (list->count > 100) {
+            double max_entropy = -1;
+            char* best = NULL;
+
+            for (int s = 0; s < SAMPLE_SIZE; s++) {
+                int idx = rand() % list->count;
+                const char* candidate = list->words[idx];
+                int pattern_counts[243] = { 0 };
+
+                for (int i = 0; i < list->count; i++) {
+                    int fb[WORD_LENGTH];
+                    compute_feedback(candidate, list->words[i], fb);
+                    int pattern = 0;
+                    for (int j = 0; j < WORD_LENGTH; j++) {
+                        pattern = pattern * 3 + fb[j];
+                    }
+                    pattern_counts[pattern]++;
+                }
+
+                double entropy = 0;
+                for (int i = 0; i < 243; i++) {
+                    if (pattern_counts[i] > 0) {
+                        double p = (double)pattern_counts[i] / list->count;
+                        entropy -= p * log2(p);
+                    }
+                }
+
+                if (entropy > max_entropy) {
+                    max_entropy = entropy;
+                    best = list->words[idx];
+                }
+            }
+            return best ? best : list->words[0];
+        }
+
+        int freq[WORD_LENGTH][26] = { 0 };
+        for (int i = 0; i < list->count; i++) {
+            for (int j = 0; j < WORD_LENGTH; j++) {
+                freq[j][list->words[i][j] - 'a']++;
+            }
+        }
+
+        int max_score = -1;
+        char* best = NULL;
+        for (int i = 0; i < list->count; i++) {
+            int score = 0;
+            for (int j = 0; j < WORD_LENGTH; j++) {
+                score += freq[j][list->words[i][j] - 'a'];
+            }
+            if (score > max_score) {
+                max_score = score;
+                best = list->words[i];
+            }
+        }
+        return best;
+    }
+
+    int main() {
+#ifdef _WIN32
+        // Enable ANSI escape codes on Windows
+        HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+        DWORD dwMode = 0;
+        GetConsoleMode(hOut, &dwMode);
+        dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+        SetConsoleMode(hOut, dwMode);
+#endif
+
+        srand(time(NULL));
+        WordList all_words = read_words("words.txt");
+        if (all_words.count == 0) {
+            fprintf(stderr, "Error: No valid words found in words.txt\n");
+            return 1;
+        }
+
+        WordList remaining = { malloc(MAX_WORDS * sizeof(char*)), all_words.count };
+        memcpy(remaining.words, all_words.words, all_words.count * sizeof(char*));
+
+        int attempt = 0;
+        int first_used = 0;
+
+        printf("\nWordle Solver\n");
+        printf("-------------\n");
+
+        while (attempt < MAX_ATTEMPTS) {
+            printf("\nAttempt %d/%d\n", attempt + 1, MAX_ATTEMPTS);
+            char* guess = select_guess(&remaining, attempt, &first_used);
+            if (!guess) {
+                printf("No possible words remaining!\n");
+                break;
+            }
+
+            printf("Suggested guess: ");
+            print_guess(guess, (int[]) { -1, -1, -1, -1, -1 });
+
+            int feedback[WORD_LENGTH];
+            while (!get_feedback(feedback, guess));
+
+            printf("\nFeedback: ");
+            print_guess(guess, feedback);
+            printf("Codes:    %d %d %d %d %d\n\n",
+                feedback[0], feedback[1], feedback[2],
+                feedback[3], feedback[4]);
+
+            WordList filtered = filter_words(&remaining, guess, feedback);
+            free(remaining.words);
+            remaining = filtered;
+
+            if (remaining.count == 0) {
+                printf("No more possible words. Game over.\n");
+                break;
+            }
+
+            int solved = 1;
+            for (int i = 0; i < WORD_LENGTH; i++) {
+                if (feedback[i] != 2) {
+                    solved = 0;
+                    break;
+                }
+            }
+
+            if (solved) {
+                printf("\x1b[1;32mSolved in %d attempts!\x1b[0m\n", attempt + 1);
+                break;
+            }
+
+            printf("Remaining possible words: %d\n", remaining.count);
+            if (remaining.count <= 20) {
+                printf("Possible solutions:");
+                for (int i = 0; i < remaining.count; i++) {
+                    if (i % 8 == 0) printf("\n");
+                    printf("%s ", remaining.words[i]);
+                }
+                printf("\n");
+            }
+
+            attempt++;
+        }
+
+        free_words(&all_words);
+        free(remaining.words);
+        return 0;
+    }
